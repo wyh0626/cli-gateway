@@ -1,0 +1,63 @@
+version: 1
+
+server:
+  listen: "0.0.0.0:18082"
+  public_url: http://127.0.0.1:18082
+  environment: development
+
+auth:
+  mode: oidc
+  issuer: http://127.0.0.1:18080/realms/cli-gateway
+  client_id: cg-cli
+  audience: cli-gateway
+  # The imported Keycloak realm places cli-gateway in aud through a mapper.
+  resource_parameter: none
+  identity_claims:
+    email: email
+    name: name
+
+cli:
+  name: cg
+
+policy:
+  ai_max_risk: write
+
+limits:
+  global_concurrency: 128
+  queue_timeout: 2s
+
+audit:
+  sinks:
+    - type: stdout
+
+domains:
+  - name: demo
+    upstream: http://demo:18081
+    timeout: 10s
+    network:
+      allow_local: true
+    downstream_auth:
+      mode: signed-identity
+      identity_audience: demo-api
+    commands:
+      - path: [item, get]
+        summary: Get one demo item
+        method: GET
+        endpoint: /v1/items/{id}
+        risk: read
+        flags:
+          - name: id
+            type: string
+            required: true
+            in: path
+      - path: [work]
+        summary: Simulate bounded backend work
+        method: GET
+        endpoint: /v1/work
+        risk: read
+        flags:
+          - name: delay-ms
+            type: int
+            default: 5
+            in: query
+            query_name: delay_ms

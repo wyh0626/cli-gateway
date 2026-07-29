@@ -1,0 +1,125 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cli-gateway-config
+data:
+  manifest.yaml: |
+    version: 1
+    server:
+      listen: "0.0.0.0:8080"
+      public_url: https://tools.example.com
+      environment: production
+      identity_key_file: /etc/cli-gateway/keys/current.pem
+      identity_previous_key_files:
+        - /etc/cli-gateway/keys/previous.pem
+    auth:
+      mode: oidc
+      issuer: https://auth.example.com
+      client_id: cg-cli
+      audience: cli-gateway
+    cli:
+      name: cg
+    policy:
+      ai_max_risk: write
+    limits:
+      global_concurrency: 512
+      queue_timeout: 250ms
+    audit:
+      sinks:
+        - type: stdout
+    domains:
+      - name: example
+        upstream: https://api.example.com
+        timeout: 30s
+        downstream_auth:
+          mode: signed-identity
+          identity_audience: example-api
+        limits:
+          concurrency: 128
+          requests_per_second: 500
+          burst: 1000
+        commands:
+          - path: [status]
+            summary: Read service status
+            method: GET
+            endpoint: /v1/status
+            risk: read
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cli-gateway
+spec:
+  # Stateful MCP sessions require transport-level affinity before increasing
+  # this value. Stateless CLI HTTP calls can otherwise scale horizontally.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cli-gateway
+  template:
+    metadata:
+      labels:
+        app: cli-gateway
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cli-gateway
+          image: ghcr.io/wyh0626/cli-gateway:replace-me
+          args: ["-manifest", "/etc/cli-gateway/manifest.yaml"]
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "2"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: config
+              mountPath: /etc/cli-gateway/manifest.yaml
+              subPath: manifest.yaml
+              readOnly: true
+            - name: identity-keys
+              mountPath: /etc/cli-gateway/keys
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: cli-gateway-config
+        - name: identity-keys
+          secret:
+            secretName: cli-gateway-identity-keys
+            defaultMode: 0400
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cli-gateway
+spec:
+  selector:
+    app: cli-gateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

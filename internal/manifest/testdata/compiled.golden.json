@@ -1,0 +1,37 @@
+{
+  "cli_name": "cg",
+  "ai_max_risk": "write",
+  "commands": [
+    {
+      "key": "inventory.resource.delete",
+      "tool_name": "inventory_resource_delete",
+      "method": "DELETE",
+      "risk": "destroy",
+      "timeout": "10s",
+      "endpoint_segments": [
+        "v1",
+        "resources",
+        "{id}"
+      ],
+      "required": [
+        "confirm",
+        "id"
+      ]
+    },
+    {
+      "key": "inventory.resource.get",
+      "tool_name": "inventory_resource_get",
+      "method": "GET",
+      "risk": "read",
+      "timeout": "10s",
+      "endpoint_segments": [
+        "v1",
+        "resources",
+        "{id}"
+      ],
+      "required": [
+        "id"
+      ]
+    }
+  ]
+}

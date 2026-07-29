@@ -1,0 +1,31 @@
+version: 1
+server:
+  listen: ":8080"
+  public_url: https://tools.example.com
+  environment: development
+auth:
+  mode: trusted-header
+  issuer: https://auth.example.com
+  trusted_jwks: https://auth.example.com/jwks.json
+  audience: cli-gateway
+cli:
+  name: cg
+policy:
+  ai_max_risk: read
+audit: {}
+domains:
+  - name: inventory
+    upstream: https://api.example.com
+    downstream_auth:
+      mode: signed-identity
+      identity_audience: inventory-api
+    commands:
+      - path: [resource, get]
+        method: GET
+        endpoint: /v1/resources/item-{id}
+        risk: read
+        flags:
+          - name: id
+            type: string
+            required: true
+            in: path

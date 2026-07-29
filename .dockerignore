@@ -1,0 +1,9 @@
+.git
+.github
+.idea
+.vscode
+bin
+coverage
+dist
+*.out
+/manifest.yaml

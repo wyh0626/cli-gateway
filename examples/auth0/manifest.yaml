@@ -1,0 +1,61 @@
+version: 1
+
+# Replace the three marked Auth0 values before starting the gateway.
+server:
+  listen: "127.0.0.1:18082"
+  public_url: http://127.0.0.1:18082
+  environment: development
+
+auth:
+  mode: oidc
+  issuer: https://your-tenant.us.auth0.com
+  client_id: replace-with-auth0-native-client-id
+  audience: https://cli-gateway.local
+  # Auth0 uses its audience extension to select a custom API.
+  resource_parameter: audience
+
+cli:
+  name: cg
+
+policy:
+  ai_max_risk: write
+
+limits:
+  global_concurrency: 128
+  queue_timeout: 2s
+
+audit:
+  sinks:
+    - type: stdout
+
+domains:
+  - name: demo
+    upstream: http://127.0.0.1:18081
+    timeout: 10s
+    network:
+      allow_local: true
+    downstream_auth:
+      mode: signed-identity
+      identity_audience: demo-api
+    commands:
+      - path: [item, get]
+        summary: Get one demo item
+        method: GET
+        endpoint: /v1/items/{id}
+        risk: read
+        flags:
+          - name: id
+            type: string
+            required: true
+            in: path
+      - path: [work]
+        summary: Simulate bounded backend work
+        method: GET
+        endpoint: /v1/work
+        risk: read
+        flags:
+          - name: delay-ms
+            type: int
+            default: 5
+            in: query
+            query_name: delay_ms

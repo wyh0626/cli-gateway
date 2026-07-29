@@ -1,0 +1,60 @@
+version: 1
+
+server:
+  listen: "0.0.0.0:18082"
+  public_url: http://127.0.0.1:18082
+  environment: development
+
+auth:
+  mode: oidc
+  issuer: http://127.0.0.1:18080
+  client_id: cg-cli
+  audience: cli-gateway
+
+cli:
+  name: cg
+
+policy:
+  ai_max_risk: write
+
+limits:
+  global_concurrency: 128
+  queue_timeout: 2s
+
+audit:
+  sinks:
+    - type: stdout
+
+domains:
+  - name: demo
+    upstream: http://demo:18081
+    timeout: 10s
+    downstream_auth:
+      mode: signed-identity
+      identity_audience: demo-api
+    limits:
+      concurrency: 64
+      requests_per_second: 500
+      burst: 100
+    commands:
+      - path: [item, get]
+        summary: Get one item
+        method: GET
+        endpoint: /v1/items/{id}
+        risk: read
+        flags:
+          - name: id
+            type: string
+            required: true
+            in: path
+      - path: [work]
+        summary: Simulate bounded backend work
+        method: GET
+        endpoint: /v1/work
+        risk: read
+        flags:
+          - name: delay-ms
+            type: int
+            default: 5
+            in: query
+            query_name: delay_ms

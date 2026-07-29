@@ -1,0 +1,116 @@
+version: 1
+
+server:
+  listen: ":8080"
+  public_url: https://gateway.example.com
+  environment: production
+  identity_key_file: /etc/cli-gateway/keys/current.pem
+  identity_previous_key_files:
+    - /etc/cli-gateway/keys/previous.pem
+
+auth:
+  mode: oidc
+  issuer: https://auth.example.com
+  trusted_jwks: https://auth.example.com/.well-known/jwks.json
+  client_id: cg-cli
+  audience: cli-gateway
+  # OAuth providers differ in how they select the target API:
+  # both (default), audience (for example Auth0), resource (RFC 8707), or none.
+  resource_parameter: both
+  identity_claims:
+    email: email
+    name: name
+
+cli:
+  name: cg
+
+policy:
+  ai_max_risk: write
+
+limits:
+  global_concurrency: 512
+  queue_timeout: 250ms
+
+audit:
+  sinks:
+    - type: stdout
+
+# Required when any production domain uses mode: authorization-code.
+# Generate a high-entropy value of at least 32 bytes.
+# downstream_oauth:
+#   token_store_file: /var/lib/cli-gateway/downstream-oauth.enc
+#   encryption_key_ref: env:CLI_GATEWAY_OAUTH_STORE_KEY
+#   state_ttl: 5m
+
+domains:
+  - name: inventory
+    upstream: https://inventory.example.com
+    timeout: 30s
+    tls:
+      insecure_skip_verify: false
+      # ca_file: /etc/cli-gateway/pki/ca.pem
+      # client_cert_file: /etc/cli-gateway/pki/client.pem
+      # client_key_file: /etc/cli-gateway/pki/client-key.pem
+    network:
+      allow_local: false
+    downstream_auth:
+      mode: signed-identity
+      identity_audience: inventory-api
+      # OAuth-backed modes accept:
+      # token_endpoint_auth_method: client_secret_basic  # default
+      # token_endpoint_auth_method: client_secret_post   # provider-specific
+    limits:
+      concurrency: 128
+      requests_per_second: 200
+      burst: 400
+    commands:
+      - path: [item, get]
+        summary: Get an inventory item
+        method: GET
+        endpoint: /v1/items/{id}
+        risk: read
+        flags:
+          - name: id
+            type: string
+            required: true
+            in: path
+            desc: Inventory item identifier
+
+      - path: [item, list]
+        summary: List inventory items
+        method: GET
+        endpoint: /v1/items
+        risk: read
+        flags:
+          - name: page
+            type: int
+            default: 1
+            in: query
+            desc: Page number, starting from 1
+          - name: page-size
+            type: int
+            default: 20
+            in: query
+            query_name: pageSize
+            desc: Number of items per page
+          - name: keyword
+            type: string
+            in: query
+            desc: Optional search keyword
+
+      - path: [item, create]
+        summary: Create an inventory item
+        method: POST
+        endpoint: /v1/items
+        risk: write
+        confirm: true
+        flags:
+          - name: name
+            type: string
+            required: true
+            in: body
+            desc: Item name
+          - name: description
+            type: string
+            in: body
+            desc: Optional item description

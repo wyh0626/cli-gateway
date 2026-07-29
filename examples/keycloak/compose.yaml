@@ -1,0 +1,35 @@
+name: cli-gateway-keycloak
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.0
+    command: ["start-dev", "--http-port=18080", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HOSTNAME: http://127.0.0.1:18080
+    ports:
+      - "127.0.0.1:18080:18080"
+      - "127.0.0.1:18082:18082"
+    volumes:
+      - ./realm.json:/opt/keycloak/data/import/realm.json:ro
+
+  demo:
+    build:
+      context: ../..
+      dockerfile: Containerfile
+    entrypoint: ["/usr/local/bin/demoapi"]
+    command: ["-listen=0.0.0.0:18081"]
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: Containerfile
+    command: ["-manifest", "/etc/cli-gateway/manifest.yaml"]
+    depends_on:
+      - keycloak
+      - demo
+    network_mode: "service:keycloak"
+    restart: on-failure
+    volumes:
+      - ./manifest.yaml:/etc/cli-gateway/manifest.yaml:ro

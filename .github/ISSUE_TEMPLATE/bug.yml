@@ -1,0 +1,51 @@
+name: Bug report
+description: Report a reproducible defect in cli-gateway
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report vulnerabilities here. Follow SECURITY.md and remove all tokens, secrets, private endpoints, and personal data.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Release, commit, operating system, and architecture
+    validations:
+      required: true
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Sanitized configuration
+      description: Include only the relevant manifest sections with secrets and private data removed
+      render: yaml
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and sanitized logs
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed credentials, private endpoints, and personal data.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

@@ -1,0 +1,106 @@
+version: 1
+
+server:
+  listen: "127.0.0.1:18082"
+  public_url: http://127.0.0.1:18082
+  environment: development
+
+auth:
+  mode: oidc
+  issuer: http://127.0.0.1:18080
+  client_id: cg-cli
+  audience: cli-gateway
+
+cli:
+  name: cg
+
+policy:
+  ai_max_risk: write
+
+limits:
+  global_concurrency: 128
+  queue_timeout: 2s
+
+audit: {}
+
+domains:
+  - name: demo
+    upstream: http://127.0.0.1:18081
+    timeout: 10s
+    limits:
+      concurrency: 64
+      requests_per_second: 500
+      burst: 100
+    network:
+      allow_local: true
+    downstream_auth:
+      mode: signed-identity
+      identity_audience: demo-api
+    commands:
+      - path: [item, get]
+        summary: Get one item
+        method: GET
+        endpoint: /v1/items/{id}
+        risk: read
+        flags:
+          - name: id
+            type: string
+            required: true
+            in: path
+      - path: [item, create]
+        summary: Create one item
+        method: POST
+        endpoint: /v1/items
+        risk: write
+        flags:
+          - name: name
+            type: string
+            required: true
+            in: body
+          - name: value
+            type: int
+            default: 1
+            in: body
+      - path: [item, delete]
+        summary: Delete one item
+        method: DELETE
+        endpoint: /v1/items/{id}
+        risk: destroy
+        confirm: true
+        flags:
+          - name: id
+            type: string
+            required: true
+            in: path
+      - path: [work]
+        summary: Simulate bounded backend work
+        method: GET
+        endpoint: /v1/work
+        risk: read
+        flags:
+          - name: delay-ms
+            type: int
+            default: 5
+            in: query
+            query_name: delay_ms
+      - path: [stats]
+        summary: Read backend concurrency statistics
+        method: GET
+        endpoint: /v1/stats
+        risk: read
+      - path: [stream]
+        summary: Stream newline-delimited JSON
+        method: GET
+        endpoint: /v1/stream
+        risk: read
+        streaming: true
+        flags:
+          - name: lines
+            type: int
+            default: 3
+            in: query
+          - name: delay-ms
+            type: int
+            default: 100
+            in: query
+            query_name: delay_ms

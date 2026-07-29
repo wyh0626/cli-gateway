@@ -1,0 +1,40 @@
+stages:
+  - verify
+  - release
+
+default:
+  image: golang:1.25.12
+  cache:
+    key: go-${CI_PROJECT_ID}
+    paths:
+      - .cache/go-build
+      - .cache/go-mod
+  variables:
+    GOCACHE: ${CI_PROJECT_DIR}/.cache/go-build
+    GOMODCACHE: ${CI_PROJECT_DIR}/.cache/go-mod
+
+verify:
+  stage: verify
+  script:
+    - test -z "$(gofmt -l .)"
+    - go vet ./...
+    - go test ./...
+    - go test -race ./...
+
+release-binaries:
+  stage: release
+  rules:
+    - if: $CI_COMMIT_TAG
+  script:
+    - mkdir -p dist
+    - GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/wyh0626/cli-gateway/client/internal/app.version=${CI_COMMIT_TAG}" -o dist/cg-darwin-amd64 ./client/cmd/cg
+    - GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/wyh0626/cli-gateway/client/internal/app.version=${CI_COMMIT_TAG}" -o dist/cg-darwin-arm64 ./client/cmd/cg
+    - GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/wyh0626/cli-gateway/client/internal/app.version=${CI_COMMIT_TAG}" -o dist/cg-linux-amd64 ./client/cmd/cg
+    - GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/wyh0626/cli-gateway/client/internal/app.version=${CI_COMMIT_TAG}" -o dist/cg-linux-arm64 ./client/cmd/cg
+    - cd dist
+    - sha256sum cg-* > checksums.txt
+  artifacts:
+    name: cg-${CI_COMMIT_TAG}
+    paths:
+      - dist/
+    expire_in: never

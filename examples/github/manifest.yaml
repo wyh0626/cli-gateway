@@ -1,0 +1,137 @@
+version: 1
+
+# This local example uses the Keycloak realm from examples/keycloak for
+# authentication into CLI Gateway, then a GitHub App for per-user downstream
+# authorization. Replace replace-with-github-app-client-id before starting it.
+server:
+  listen: "0.0.0.0:18082"
+  public_url: http://127.0.0.1:18082
+  environment: development
+
+auth:
+  mode: oidc
+  issuer: http://127.0.0.1:18080/realms/cli-gateway
+  client_id: cg-cli
+  audience: cli-gateway
+  resource_parameter: none
+
+cli:
+  name: cg
+
+policy:
+  ai_max_risk: read
+
+limits:
+  global_concurrency: 128
+  queue_timeout: 2s
+
+audit:
+  sinks:
+    - type: stdout
+
+downstream_oauth:
+  token_store_file: /var/lib/cli-gateway/downstream-oauth.enc
+  encryption_key_ref: env:CLI_GATEWAY_OAUTH_STORE_KEY
+  state_ttl: 5m
+
+domains:
+  - name: github
+    upstream: https://api.github.com
+    timeout: 20s
+    downstream_auth:
+      mode: authorization-code
+      authorization_code:
+        authorization_url: https://github.com/login/oauth/authorize
+        token_url: https://github.com/login/oauth/access_token
+        client_id: replace-with-github-app-client-id
+        client_secret_ref: env:CLI_GATEWAY_GITHUB_CLIENT_SECRET
+        token_endpoint_auth_method: client_secret_post
+      cache:
+        capacity: 1000
+        refresh_skew: 1m
+        negative_ttl: 2s
+    limits:
+      concurrency: 32
+      requests_per_second: 20
+      burst: 20
+    commands:
+      - path: [user, get]
+        summary: Get the authenticated GitHub user
+        method: GET
+        endpoint: /user
+        risk: read
+      - path: [installations, list]
+        summary: List GitHub App installations visible to the user
+        method: GET
+        endpoint: /user/installations
+        risk: read
+        flags:
+          - name: per-page
+            type: int
+            default: 30
+            in: query
+            query_name: per_page
+          - name: page
+            type: int
+            default: 1
+            in: query
+      - path: [repositories, list]
+        summary: List repositories visible to the authenticated user
+        method: GET
+        endpoint: /user/repos
+        risk: read
+        flags:
+          - name: visibility
+            type: string
+            default: all
+            in: query
+          - name: per-page
+            type: int
+            default: 30
+            in: query
+            query_name: per_page
+          - name: page
+            type: int
+            default: 1
+            in: query
+      - path: [repository, get]
+        summary: Get one GitHub repository
+        method: GET
+        endpoint: /repos/{owner}/{repo}
+        risk: read
+        flags:
+          - name: owner
+            type: string
+            required: true
+            in: path
+          - name: repo
+            type: string
+            required: true
+            in: path
+      - path: [issues, list]
+        summary: List issues for a GitHub repository
+        method: GET
+        endpoint: /repos/{owner}/{repo}/issues
+        risk: read
+        flags:
+          - name: owner
+            type: string
+            required: true
+            in: path
+          - name: repo
+            type: string
+            required: true
+            in: path
+          - name: state
+            type: string
+            default: open
+            in: query
+          - name: per-page
+            type: int
+            default: 30
+            in: query
+            query_name: per_page
+          - name: page
+            type: int
+            default: 1
+            in: query

@@ -1,0 +1,37 @@
+services:
+  issuer:
+    build:
+      context: .
+      dockerfile: Containerfile
+    entrypoint: ["/usr/local/bin/devissuer"]
+    command:
+      - -listen=0.0.0.0:18080
+      - -issuer=http://127.0.0.1:18080
+      - -resource=http://127.0.0.1:18082
+    ports:
+      - "18080:18080"
+      - "18082:18082"
+
+  demo:
+    build:
+      context: .
+      dockerfile: Containerfile
+    entrypoint: ["/usr/local/bin/demoapi"]
+    command: ["-listen=0.0.0.0:18081"]
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Containerfile
+    command: ["-manifest", "/etc/cli-gateway/manifest.yaml"]
+    # The development-only HTTP issuer must be loopback. Sharing the issuer's
+    # network namespace preserves that security invariant without weakening
+    # production endpoint validation.
+    network_mode: "service:issuer"
+    volumes:
+      - ./examples/compose/manifest.yaml:/etc/cli-gateway/manifest.yaml:ro
+    depends_on:
+      issuer:
+        condition: service_started
+      demo:
+        condition: service_started
