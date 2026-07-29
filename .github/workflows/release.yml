@@ -47,7 +47,7 @@ jobs:
           path: dist
           format: spdx-json
           output-file: dist/sbom-${{ matrix.goos }}-${{ matrix.goarch }}.spdx.json
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/*
       - uses: actions/upload-artifact@v4
@@ -102,7 +102,7 @@ jobs:
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
           build-args: VERSION=${{ github.ref_name }}
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.build.outputs.digest }}
