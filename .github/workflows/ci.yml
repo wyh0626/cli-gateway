@@ -19,7 +19,12 @@ jobs:
           cache: true
       - run: make verify-m6
       - name: Scan reachable Go vulnerabilities
-        uses: golang/govulncheck-action@v1
+        uses: golang/govulncheck-action@v1.1.0
+        with:
+          go-version-input: "1.25.12"
+          check-latest: false
+          cache: false
+          repo-checkout: false
       - name: Verify white-label build
         run: |
           make build-client CLI_NAME=acme
