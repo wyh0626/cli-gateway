@@ -550,10 +550,27 @@ Required codes are `E_AUTH_MISSING`, `E_AUTH_INVALID`, `E_AUTH_EXPIRED`, `E_AI_R
 
 `/mcp` uses Streamable HTTP from the official Go SDK and the same bearer authentication middleware as `/exec`.
 
-- POST, GET, and DELETE semantics follow the negotiated MCP protocol version.
+- The same endpoint supports MCP `2026-07-28` and earlier clients. Requests
+  carrying `MCP-Protocol-Version: 2026-07-28` or a later compatible version use
+  a stateless handler. Older requests and an initial request without the header
+  use the legacy stateful handler.
+- `server/discover` negotiates the newest mutually supported version. New
+  clients fall back to the legacy `initialize` handshake when discovery or
+  version negotiation requires it.
+- MCP `2026-07-28` uses self-contained POST requests and
+  `subscriptions/listen`; it does not create an `Mcp-Session-Id`.
+- Legacy POST, GET, and DELETE semantics continue to follow the negotiated
+  stateful MCP protocol version.
 - Authentication and resource authorization complete before a session is created or resumed.
-- Stateful sessions, when enabled, are bound to authenticated principal, MCP resource, and runtime generation. Session IDs are accepted only from the protocol header and have a strict length and character allowlist.
+- Legacy stateful sessions are bound to authenticated principal, MCP resource,
+  and runtime generation. Session IDs are accepted only from the protocol
+  header and have a strict length and character allowlist.
+- Stateless requests hold a runtime-generation lease only for the request
+  lifetime. Active `subscriptions/listen` requests are migrated on reload so
+  authorized clients receive tool-list changes without pinning an obsolete
+  generation.
 - `tools/list` converts authorized commands to tools named `<domain>_<path_parts>`.
+- Principal-specific list results use `cacheScope: private`.
 - Descriptions append `[risk:<risk>]`.
 - Input schemas come from compiled flags.
 - Destroy tools require a boolean `confirm` property.
@@ -770,7 +787,12 @@ Deliver Authorization Code with PKCE and Device Flow, keyring, single-flight tok
 
 ### M5: MCP adapter
 
-Deliver authenticated Streamable HTTP POST/GET/DELETE, RFC 9728 metadata and challenges, filtered tools/list, shared tools/call execution, confirm adaptation, session ownership, cancellation, tools/list_changed, bounded streaming fallback, and MCP Inspector acceptance tests.
+Deliver one authenticated Streamable HTTP endpoint with MCP `2026-07-28`
+stateless POST and legacy stateful POST/GET/DELETE, version discovery and
+fallback, RFC 9728 metadata and challenges, filtered tools/list, shared
+tools/call execution, confirm adaptation, legacy session ownership,
+cancellation, both `subscriptions/listen` and legacy tools/list_changed,
+bounded streaming fallback, and MCP Inspector acceptance tests.
 
 ### M6: open-source and release hardening
 

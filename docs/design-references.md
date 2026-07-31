@@ -47,7 +47,8 @@ replace a general L7 proxy.
 - OAuth 2.0 Security Best Current Practice: RFC 9700
 - Proof Key for Code Exchange: RFC 7636
 - OAuth 2.0 Resource Indicators: RFC 8707
-- Model Context Protocol Streamable HTTP transport
+- [Model Context Protocol `2026-07-28`](https://modelcontextprotocol.io/specification/2026-07-28)
+  stateless core and Streamable HTTP compatibility model
 
 When a project and a standard conflict, the security requirements in the
 standards and this repository's threat model take precedence.

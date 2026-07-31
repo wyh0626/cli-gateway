@@ -18,7 +18,8 @@ CLI Gateway 是一个 Go 实现的能力网关。它通过声明式配置，把 
 
 - 为用户、CI 和 AI Agent 提供统一、可治理的 API 入口。
 - 无需为每个服务单独开发客户端，服务端配置即可生成动态 CLI 命令。
-- 从同一份 Manifest 生成 MCP 工具。
+- 从同一份 Manifest 生成 MCP 工具；同一端点兼容 MCP `2026-07-28`
+  无状态请求和旧版有状态客户端。
 - CLI 支持 OIDC Authorization Code + PKCE 和 Device Authorization。
 - 每个后端显式选择认证方式：`signed-identity`、RFC 8693
   `token-exchange`、`client-credentials`、用户级 `authorization-code`
@@ -26,16 +27,18 @@ CLI Gateway 是一个 Go 实现的能力网关。它通过声明式配置，把 
 - 命令白名单、风险等级、二次确认、限流、熔断、结构化错误、指标和审计。
 - 支持构建相互隔离的企业定制 CLI。
 
+Codex、Claude、Claude Code 和其他 Agent 可以执行网关生成的 CLI 命令，也可以
+直接连接 `/mcp`。两种方式最终进入同一套网关治理、执行流水线和后端服务。
+
 ```mermaid
 flowchart LR
-    User["用户 / CI"] --> CLI["cg 或定制 CLI"]
-    Agent["AI Agent"] --> MCP["MCP Streamable HTTP"]
-    CLI --> Gateway["CLI Gateway 执行流水线"]
-    MCP --> Gateway
-    Gateway --> API1["内部 API"]
-    Gateway --> API2["外部服务 API"]
-    IdP["OAuth / OIDC 服务"] --> CLI
-    IdP --> Gateway
+    Codex["Codex"] --> Access["接入方式<br/>CLI 命令：cg 或定制 CLI<br/>MCP 端点：/mcp"]
+    Claude["Claude / Claude Code"] --> Access
+    Other["其他 AI Agent"] --> Access
+    Access --> Gateway["CLI Gateway<br/>统一治理与执行流水线"]
+    Gateway --> Internal["内部服务"]
+    Gateway --> Cloud["云服务 API"]
+    Gateway --> SaaS["GitHub / SaaS API"]
 ```
 
 ## 选择快速上手方式
@@ -164,8 +167,9 @@ domains:
 cg inventory item get --id server-42
 ```
 
-同一命令也会通过 `/mcp` 暴露为 MCP 工具。服务端会对每次执行重新鉴权，
-客户端本地缓存不具备授权能力。
+同一命令也会通过 `/mcp` 暴露为 MCP 工具。该端点会协商 MCP `2026-07-28`
+无状态请求或旧版有状态 Streamable HTTP Session。两种模式都会对每次执行
+重新鉴权，客户端本地缓存不具备授权能力。
 
 ## 后端用户授权
 
@@ -253,9 +257,11 @@ kubectl apply -f deploy/kubernetes/cli-gateway.yaml
 
 当前扩展边界：
 
-- Token 缓存、限流器、熔断器、待处理的下游 OAuth 状态和 MCP Session 在进程内。
+- Token 缓存、限流器、熔断器、待处理的下游 OAuth 状态和旧版 MCP Session
+  在进程内。
 - 加密文件 Token Store 是单进程、单写者模型。
-- 多副本下，有状态 MCP Session 需要负载均衡会话亲和。
+- 多副本下，旧版有状态 MCP Session 需要负载均衡会话亲和；MCP
+  `2026-07-28` 请求是无状态的，不需要会话亲和。
 - 全局配额和跨实例凭证缓存需要额外选择分布式实现。
 
 ## 验证
@@ -268,7 +274,7 @@ make test-race
 官方 MCP Go SDK 集成测试：
 
 ```bash
-go test ./internal/adapter/mcp -run TestStreamableHTTP
+go test ./internal/adapter/mcp
 ```
 
 ## 文档

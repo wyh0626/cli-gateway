@@ -56,7 +56,8 @@ It is not a substitute for an organization-specific security review.
 - [ ] Size global and per-domain concurrency and rate limits from load tests.
 - [ ] Configure readiness, liveness, graceful termination, and a disruption
       budget.
-- [ ] Use MCP session affinity before running multiple replicas.
+- [ ] Use session affinity for legacy stateful MCP clients before running
+      multiple replicas. MCP `2026-07-28` stateless requests need no affinity.
 - [ ] Keep the encrypted file token store on one writer. Use an audited shared
       store before multi-replica downstream Authorization Code operation.
 - [ ] Decide whether process-local caches, breakers, and quotas are acceptable;

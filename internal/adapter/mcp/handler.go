@@ -32,8 +32,10 @@ import (
 )
 
 const (
-	maxToolResult = 4 << 20
-	sessionHeader = "Mcp-Session-Id"
+	maxToolResult         = 4 << 20
+	sessionHeader         = "Mcp-Session-Id"
+	protocolVersionHeader = "MCP-Protocol-Version"
+	statelessProtocol     = "2026-07-28"
 )
 
 const (
@@ -42,8 +44,9 @@ const (
 )
 
 type requestState struct {
-	mu      sync.Mutex
-	pending *sessionBundle
+	mu        sync.Mutex
+	pending   *sessionBundle
+	transient *sessionBundle
 }
 
 type sessionBundle struct {
@@ -73,6 +76,7 @@ type Handler struct {
 	closed       atomic.Bool
 	mu           sync.Mutex
 	sessions     map[string]*sessionBundle
+	transients   map[*sessionBundle]struct{}
 	observer     SessionObserver
 }
 
@@ -89,13 +93,26 @@ func New(runtimeManager *runtimecfg.Manager, verifier gatewayauth.Verifier, reso
 	handler := &Handler{
 		runtime: runtimeManager, verifier: verifier, resourceMeta: resourceMetadataURL,
 		sessionTTL: 30 * time.Minute, userKey: userKey, cancel: cancel,
-		sessions: make(map[string]*sessionBundle),
+		sessions: make(map[string]*sessionBundle), transients: make(map[*sessionBundle]struct{}),
 	}
 	if len(observers) != 0 {
 		handler.observer = observers[0]
 	}
-	stream := sdk.NewStreamableHTTPHandler(handler.serverForRequest, &sdk.StreamableHTTPOptions{
+	statefulStream := sdk.NewStreamableHTTPHandler(handler.serverForRequest, &sdk.StreamableHTTPOptions{
 		Logger: logger, SessionTimeout: handler.sessionTTL,
+	})
+	statelessStream := sdk.NewStreamableHTTPHandler(handler.serverForStatelessRequest, &sdk.StreamableHTTPOptions{
+		Logger: logger, Stateless: true, PropagateRequestCancellation: true,
+	})
+	stream := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get(protocolVersionHeader) >= statelessProtocol {
+			statelessStream.ServeHTTP(writer, request)
+			return
+		}
+		if sessionID := request.Header.Get(sessionHeader); sessionID != "" {
+			handler.touchOwned(sessionID, request)
+		}
+		statefulStream.ServeHTTP(writer, request)
 	})
 	tokenVerifier := func(ctx context.Context, token string, _ *http.Request) (*mcpauth.TokenInfo, error) {
 		principal, err := handler.verifier.Verify(ctx, token)
@@ -135,20 +152,22 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	request = request.WithContext(context.WithValue(request.Context(), requestStateKey{}, state))
 	capture := &responseCapture{ResponseWriter: writer, status: http.StatusOK}
 	requestSession := request.Header.Get(sessionHeader)
-	if requestSession != "" {
-		h.touch(requestSession)
-	}
 	h.stream.ServeHTTP(capture, request)
 
 	state.mu.Lock()
 	pending := state.pending
 	state.pending = nil
+	transient := state.transient
+	state.transient = nil
 	state.mu.Unlock()
 	if pending != nil {
 		sessionID := capture.Header().Get(sessionHeader)
 		if sessionID == "" || capture.status < 200 || capture.status >= 300 || !h.store(sessionID, pending) {
 			_ = pending.lease.Close()
 		}
+	}
+	if transient != nil {
+		h.releaseTransient(transient)
 	}
 	if request.Method == http.MethodDelete && requestSession != "" && capture.status >= 200 && capture.status < 300 {
 		h.release(requestSession)
@@ -158,6 +177,38 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 type requestStateKey struct{}
 
 func (h *Handler) serverForRequest(request *http.Request) *sdk.Server {
+	bundle := h.newBundle(request)
+	if bundle == nil {
+		return nil
+	}
+	state, ok := request.Context().Value(requestStateKey{}).(*requestState)
+	if !ok {
+		_ = bundle.lease.Close()
+		return nil
+	}
+	state.mu.Lock()
+	state.pending = bundle
+	state.mu.Unlock()
+	return bundle.server
+}
+
+func (h *Handler) serverForStatelessRequest(request *http.Request) *sdk.Server {
+	bundle := h.newBundle(request)
+	if bundle == nil {
+		return nil
+	}
+	state, ok := request.Context().Value(requestStateKey{}).(*requestState)
+	if !ok || !h.storeTransient(bundle) {
+		_ = bundle.lease.Close()
+		return nil
+	}
+	state.mu.Lock()
+	state.transient = bundle
+	state.mu.Unlock()
+	return bundle.server
+}
+
+func (h *Handler) newBundle(request *http.Request) *sessionBundle {
 	tokenInfo := mcpauth.TokenInfoFromContext(request.Context())
 	if tokenInfo == nil {
 		return nil
@@ -172,20 +223,22 @@ func (h *Handler) serverForRequest(request *http.Request) *sdk.Server {
 	}
 	bundle := &sessionBundle{lease: lease, principal: principal, lastSeen: time.Now()}
 	bundle.server, bundle.tools = h.buildServer(lease.Generation, principal)
-	state, ok := request.Context().Value(requestStateKey{}).(*requestState)
-	if !ok {
-		_ = lease.Close()
-		return nil
-	}
-	state.mu.Lock()
-	state.pending = bundle
-	state.mu.Unlock()
-	return bundle.server
+	return bundle
 }
 
 func (h *Handler) buildServer(generation *runtimecfg.Generation, principal model.Principal) (*sdk.Server, []string) {
 	server := sdk.NewServer(&sdk.Implementation{Name: "cli-gateway", Version: "v0.3.0"}, &sdk.ServerOptions{
 		Capabilities: &sdk.ServerCapabilities{Tools: &sdk.ToolCapabilities{ListChanged: true}},
+	})
+	server.AddReceivingMiddleware(func(next sdk.MethodHandler) sdk.MethodHandler {
+		return func(ctx context.Context, method string, request sdk.Request) (sdk.Result, error) {
+			result, err := next(ctx, method, request)
+			if list, ok := result.(*sdk.ListToolsResult); ok {
+				list.CacheScope = "private"
+				list.TTLMs = 0
+			}
+			return result, err
+		}
 	})
 	commands := generation.Catalog.Visible(principal, model.InvokerAI)
 	names := make([]string, 0, len(commands))
@@ -337,13 +390,42 @@ func (h *Handler) store(sessionID string, bundle *sessionBundle) bool {
 	return true
 }
 
-func (h *Handler) touch(sessionID string) {
+func (h *Handler) storeTransient(bundle *sessionBundle) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed.Load() {
+		return false
+	}
+	h.transients[bundle] = struct{}{}
+	return true
+}
+
+func (h *Handler) releaseTransient(bundle *sessionBundle) {
+	h.mu.Lock()
+	delete(h.transients, bundle)
+	h.mu.Unlock()
+	h.closeBundle(bundle)
+}
+
+func (h *Handler) touchOwned(sessionID string, request *http.Request) {
+	tokenInfo := mcpauth.TokenInfoFromContext(request.Context())
+	if tokenInfo == nil {
+		return
+	}
+	principal, ok := tokenInfo.Extra[principalExtra].(model.Principal)
+	if !ok {
+		return
+	}
 	h.mu.Lock()
 	bundle := h.sessions[sessionID]
 	h.mu.Unlock()
 	if bundle != nil {
 		bundle.mu.Lock()
-		bundle.lastSeen = time.Now()
+		if bundle.principal.Issuer == principal.Issuer &&
+			bundle.principal.Tenant == principal.Tenant &&
+			bundle.principal.Subject == principal.Subject {
+			bundle.lastSeen = time.Now()
+		}
 		bundle.mu.Unlock()
 	}
 }
@@ -357,13 +439,20 @@ func (h *Handler) release(sessionID string) {
 	}
 	h.mu.Unlock()
 	if bundle != nil {
-		bundle.mu.Lock()
-		lease := bundle.lease
-		bundle.lease = nil
-		bundle.mu.Unlock()
-		if lease != nil {
-			_ = lease.Close()
-		}
+		h.closeBundle(bundle)
+	}
+}
+
+func (h *Handler) closeBundle(bundle *sessionBundle) {
+	if bundle == nil {
+		return
+	}
+	bundle.mu.Lock()
+	lease := bundle.lease
+	bundle.lease = nil
+	bundle.mu.Unlock()
+	if lease != nil {
+		_ = lease.Close()
 	}
 }
 
@@ -398,8 +487,11 @@ func (h *Handler) onReload(_, next *runtimecfg.Generation) {
 		return
 	}
 	h.mu.Lock()
-	bundles := make([]*sessionBundle, 0, len(h.sessions))
+	bundles := make([]*sessionBundle, 0, len(h.sessions)+len(h.transients))
 	for _, bundle := range h.sessions {
+		bundles = append(bundles, bundle)
+	}
+	for bundle := range h.transients {
 		bundles = append(bundles, bundle)
 	}
 	h.mu.Unlock()
@@ -449,18 +541,17 @@ func (h *Handler) Close() {
 	h.mu.Lock()
 	sessions := h.sessions
 	h.sessions = make(map[string]*sessionBundle)
+	transients := h.transients
+	h.transients = make(map[*sessionBundle]struct{})
 	if h.observer != nil {
 		h.observer.SetActiveMCPSessions(0)
 	}
 	h.mu.Unlock()
 	for _, bundle := range sessions {
-		bundle.mu.Lock()
-		lease := bundle.lease
-		bundle.lease = nil
-		bundle.mu.Unlock()
-		if lease != nil {
-			_ = lease.Close()
-		}
+		h.closeBundle(bundle)
+	}
+	for bundle := range transients {
+		h.closeBundle(bundle)
 	}
 }
 

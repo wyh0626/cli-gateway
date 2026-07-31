@@ -19,7 +19,8 @@ credential, rate-limit, tracing, and audit pipeline.
 
 - One governed API entry point for humans, CI jobs, and AI agents.
 - Dynamic CLI commands without writing a separate client for every service.
-- MCP tools generated from the same server-side manifest.
+- MCP tools generated from the same server-side manifest, with MCP
+  `2026-07-28` stateless requests and legacy stateful clients on one endpoint.
 - OIDC Authorization Code + PKCE and Device Authorization for the CLI.
 - Explicit downstream authentication per API:
   `signed-identity`, RFC 8693 `token-exchange`, `client-credentials`,
@@ -29,16 +30,19 @@ credential, rate-limit, tracing, and audit pipeline.
 - Build-time white-label clients with isolated environment variables, local
   storage, keyring entries, User-Agent, and manifest validation.
 
+Codex, Claude, Claude Code, and other agents can either run the generated CLI
+commands or connect directly to `/mcp`. Both paths reach the same governed
+gateway pipeline and backend services.
+
 ```mermaid
 flowchart LR
-    User["Human / CI"] --> CLI["cg or a branded CLI"]
-    Agent["AI agent"] --> MCP["MCP Streamable HTTP"]
-    CLI --> Gateway["CLI Gateway execution pipeline"]
-    MCP --> Gateway
-    Gateway --> API1["Internal API"]
-    Gateway --> API2["Vendor API"]
-    IdP["OAuth / OIDC provider"] --> CLI
-    IdP --> Gateway
+    Codex["Codex"] --> Access["Access methods<br/>CLI commands: cg or a branded CLI<br/>MCP endpoint: /mcp"]
+    Claude["Claude / Claude Code"] --> Access
+    Other["Other AI agents"] --> Access
+    Access --> Gateway["CLI Gateway<br/>one governed execution pipeline"]
+    Gateway --> Internal["Internal services"]
+    Gateway --> Cloud["Cloud APIs"]
+    Gateway --> SaaS["GitHub / SaaS APIs"]
 ```
 
 ## Choose a quick start
@@ -172,8 +176,10 @@ After a gateway reload and `cg update-commands`, invoke it with:
 cg inventory item get --id server-42
 ```
 
-The same command is exposed as an MCP tool at `/mcp`. The server reauthorizes
-every execution; the local CLI cache is never an authorization authority.
+The same command is exposed as an MCP tool at `/mcp`. The endpoint negotiates
+MCP `2026-07-28` stateless requests and legacy stateful Streamable HTTP
+sessions. Both variants reauthorize every execution; the local CLI cache is
+never an authorization authority.
 
 ## Downstream user authorization
 
@@ -266,9 +272,10 @@ review [the production checklist](docs/production-checklist.md).
 Current scaling boundaries:
 
 - Token caches, limiters, circuit breakers, pending downstream OAuth state, and
-  MCP sessions are process-local.
+  legacy MCP sessions are process-local.
 - The encrypted file token store is a single-writer, single-process store.
-- Stateful MCP sessions need load-balancer affinity with multiple replicas.
+- Legacy stateful MCP sessions need load-balancer affinity with multiple
+  replicas. MCP `2026-07-28` requests are stateless and need no affinity.
 - Global quotas and shared credential caches require an intentionally selected
   distributed implementation.
 
@@ -282,7 +289,7 @@ make test-race
 The official MCP Go SDK integration is covered by:
 
 ```bash
-go test ./internal/adapter/mcp -run TestStreamableHTTP
+go test ./internal/adapter/mcp
 ```
 
 ## Documentation

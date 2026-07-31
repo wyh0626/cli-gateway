@@ -1,6 +1,7 @@
 package mcpadapter
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -67,6 +68,9 @@ func TestHandlerListsFilteredToolsAndCallsSharedInvoker(t *testing.T) {
 	defer server.Close()
 
 	httpClient := &http.Client{Transport: bearerTransport{base: http.DefaultTransport}}
+	assertStatelessLifecycle(t, httpClient, server.URL)
+	assertLegacySessionLifecycle(t, httpClient, server.URL)
+
 	changed := make(chan struct{}, 4)
 	client := sdk.NewClient(&sdk.Implementation{Name: "test-client", Version: "v1"}, &sdk.ClientOptions{
 		ToolListChangedHandler: func(context.Context, *sdk.ToolListChangedRequest) {
@@ -80,6 +84,9 @@ func TestHandlerListsFilteredToolsAndCallsSharedInvoker(t *testing.T) {
 		t.Fatalf("Connect() error = %v", err)
 	}
 	defer session.Close()
+	if got := session.InitializeResult().ProtocolVersion; got != statelessProtocol {
+		t.Fatalf("negotiated protocol = %q, want %q", got, statelessProtocol)
+	}
 
 	tools, err := session.ListTools(context.Background(), nil)
 	if err != nil {
@@ -87,6 +94,9 @@ func TestHandlerListsFilteredToolsAndCallsSharedInvoker(t *testing.T) {
 	}
 	if len(tools.Tools) != 1 || tools.Tools[0].Name != "demo_get" {
 		t.Fatalf("tools = %#v", tools.Tools)
+	}
+	if tools.CacheScope != "private" {
+		t.Fatalf("tools cache scope = %q, want private", tools.CacheScope)
 	}
 	result, err := session.CallTool(context.Background(), &sdk.CallToolParams{
 		Name: "demo_get", Arguments: map[string]any{},
@@ -121,6 +131,103 @@ func TestHandlerListsFilteredToolsAndCallsSharedInvoker(t *testing.T) {
 	if len(tools.Tools) != 1 || tools.Tools[0].Name != "demo_list" {
 		t.Fatalf("tools after reload = %#v", tools.Tools)
 	}
+}
+
+func assertStatelessLifecycle(t *testing.T, client *http.Client, endpoint string) {
+	t.Helper()
+	discover := `{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"stateless-client","version":"v1"},"io.modelcontextprotocol/clientCapabilities":{}}}}`
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewBufferString(discover))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set(protocolVersionHeader, statelessProtocol)
+	request.Header.Set("Mcp-Method", "server/discover")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || response.Header.Get(sessionHeader) != "" {
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		t.Fatalf("stateless discover status = %d, session = %q, body = %s", response.StatusCode, response.Header.Get(sessionHeader), body)
+	}
+	response.Body.Close()
+
+	request, err = http.NewRequest(http.MethodDelete, endpoint, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set(protocolVersionHeader, statelessProtocol)
+	response, err = client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusMethodNotAllowed || response.Header.Get("Allow") != http.MethodPost {
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		t.Fatalf("stateless delete status = %d, allow = %q, body = %s", response.StatusCode, response.Header.Get("Allow"), body)
+	}
+	response.Body.Close()
+}
+
+func assertLegacySessionLifecycle(t *testing.T, client *http.Client, endpoint string) {
+	t.Helper()
+	initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"legacy-client","version":"v1"}}}`
+	response := legacyRequest(t, client, endpoint, http.MethodPost, "", initialize)
+	sessionID := response.Header.Get(sessionHeader)
+	if response.StatusCode != http.StatusOK || sessionID == "" {
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		t.Fatalf("legacy initialize status = %d, session = %q, body = %s", response.StatusCode, sessionID, body)
+	}
+	response.Body.Close()
+
+	response = legacyRequest(t, client, endpoint, http.MethodPost, sessionID, `{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		t.Fatalf("legacy initialized status = %d, body = %s", response.StatusCode, body)
+	}
+	response.Body.Close()
+
+	response = legacyRequest(t, client, endpoint, http.MethodPost, sessionID, `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`)
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		t.Fatalf("legacy tools/list status = %d, body = %s", response.StatusCode, body)
+	}
+	response.Body.Close()
+
+	response = legacyRequest(t, client, endpoint, http.MethodDelete, sessionID, "")
+	if response.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		t.Fatalf("legacy delete status = %d, body = %s", response.StatusCode, body)
+	}
+	response.Body.Close()
+}
+
+func legacyRequest(t *testing.T, client *http.Client, endpoint, method, sessionID, body string) *http.Response {
+	t.Helper()
+	request, err := http.NewRequest(method, endpoint, bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set(protocolVersionHeader, "2025-11-25")
+	if body != "" {
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Accept", "application/json, text/event-stream")
+	}
+	if sessionID != "" {
+		request.Header.Set(sessionHeader, sessionID)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
 }
 
 const mcpManifest = `version: 1
