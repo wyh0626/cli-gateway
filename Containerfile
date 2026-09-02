@@ -1,4 +1,4 @@
-FROM golang:1.26.5 AS build
+FROM golang:1.27.0 AS build
 ARG VERSION=0.3.0-dev
 WORKDIR /src
 COPY go.mod go.sum ./
