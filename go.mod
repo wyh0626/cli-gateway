@@ -7,7 +7,7 @@ toolchain go1.25.12
 require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/lestrrat-go/jwx/v2 v2.1.7
-	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/spf13/cobra v1.10.2
 	github.com/zalando/go-keyring v0.2.8
 	gopkg.in/yaml.v3 v3.0.1
